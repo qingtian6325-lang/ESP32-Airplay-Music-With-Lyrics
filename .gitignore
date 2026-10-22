@@ -1,5 +1,4 @@
 .superpowers/
-
-
 .worktrees/
-
+.pio/
+.vscode/
