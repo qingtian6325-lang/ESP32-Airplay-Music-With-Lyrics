@@ -70,7 +70,7 @@ static TimerHandle_t s_meta_timer = NULL;
 
 // Audio data callback: forwards decoded stereo PCM frames directly to audio_i2s_write
 static void bt_audio_data_callback(const uint8_t *data, uint32_t len) {
-    if (data && len > 0) {
+    if (data && len > 0 && s_is_playing) {
         audio_i2s_write(data, (size_t)len);
     }
 }

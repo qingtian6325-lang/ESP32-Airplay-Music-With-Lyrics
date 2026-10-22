@@ -416,11 +416,13 @@ bool ui_init(void) {
         }
     }
 
+    if (!s_current_lyrics || !s_disp_buf) {
+        return false;
+    }
+
     // LVGL Init
     lv_init();
-    if (s_disp_buf) {
-        lv_disp_draw_buf_init(&s_disp_draw_buf, s_disp_buf, NULL, DISP_HOR_RES * 20);
-    }
+    lv_disp_draw_buf_init(&s_disp_draw_buf, s_disp_buf, NULL, DISP_HOR_RES * 20);
 
     lv_disp_drv_init(&s_disp_drv);
     s_disp_drv.hor_res = DISP_HOR_RES;

@@ -25,13 +25,14 @@
 // =============================================================================
 // System State & Synchronization
 // =============================================================================
-static SystemAudioState s_system_audio_state = STATE_IDLE;
+static volatile SystemAudioState s_system_audio_state = STATE_IDLE;
 static SemaphoreHandle_t s_state_mutex = NULL;
 
-// Playback timing and progress interpolation variables
+// Playback timing and progress interpolation variables (mutated exclusively under s_state_mutex)
 static volatile uint32_t s_playback_start_ms = 0;
 static volatile uint32_t s_track_duration_ms = 0;
 static volatile bool s_is_playing = false;
+static bool s_bt_stopped_for_airplay = false;
 
 // Display tracking
 static char s_current_title[128] = "Ready to Play";
@@ -57,13 +58,19 @@ static void handle_system_audio_event(AudioEvent event) {
 
             // AirPlay preemption over Bluetooth:
             // Stop Bluetooth A2DP audio so MAX98357A I2S is exclusively driven by AirPlay
-            if (old_state == STATE_BT_PLAYING && new_state == STATE_AIRPLAY_PLAYING) {
-                log_i("AirPlay preempts Bluetooth playback: stopping Bluetooth A2DP stream");
-                bt_sink_stop();
-            }
-
-            // Both audio sources stopped / inactive -> return to IDLE state
-            if (new_state == STATE_IDLE) {
+            if (new_state == STATE_AIRPLAY_PLAYING) {
+                if (old_state == STATE_BT_PLAYING || bt_sink_is_connected()) {
+                    log_i("Entering AirPlay playback: stopping Bluetooth A2DP stream");
+                    bt_sink_stop();
+                    s_bt_stopped_for_airplay = true;
+                }
+                s_is_playing = true;
+                s_playback_start_ms = millis();
+            } else if (old_state == STATE_IDLE && new_state == STATE_BT_PLAYING) {
+                s_is_playing = true;
+                s_playback_start_ms = millis();
+            } else if (new_state == STATE_IDLE) {
+                // Both audio sources stopped / inactive -> return to IDLE state
                 s_is_playing = false;
                 s_track_duration_ms = 0;
                 s_playback_start_ms = 0;
@@ -75,9 +82,10 @@ static void handle_system_audio_event(AudioEvent event) {
                 ui_update_progress(0, 0);
 
                 // If Bluetooth was stopped due to AirPlay preemption, re-initialize Bluetooth sink
-                if (old_state == STATE_AIRPLAY_PLAYING) {
+                if (s_bt_stopped_for_airplay) {
                     log_i("AirPlay stream finished: re-initializing Bluetooth sink");
                     bt_sink_init(SPEAKER_NAME);
+                    s_bt_stopped_for_airplay = false;
                 }
             }
 
@@ -111,34 +119,35 @@ static void on_bt_track_changed(const TrackInfo *track) {
     log_i("BT Track Notification: '%s' - '%s' [%s] (%u ms)",
           track->title, track->artist, track->album, (unsigned int)track->duration_ms);
 
-    if (s_system_audio_state == STATE_BT_PLAYING || s_system_audio_state == STATE_IDLE) {
-        strncpy(s_current_title, track->title, sizeof(s_current_title) - 1);
-        s_current_title[sizeof(s_current_title) - 1] = '\0';
-        strncpy(s_current_artist, track->artist, sizeof(s_current_artist) - 1);
-        s_current_artist[sizeof(s_current_artist) - 1] = '\0';
+    if (s_state_mutex == NULL) {
+        return;
+    }
 
-        s_playback_start_ms = millis();
-        s_track_duration_ms = track->duration_ms;
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_system_audio_state == STATE_BT_PLAYING || s_system_audio_state == STATE_IDLE) {
+            strncpy(s_current_title, track->title, sizeof(s_current_title) - 1);
+            s_current_title[sizeof(s_current_title) - 1] = '\0';
+            strncpy(s_current_artist, track->artist, sizeof(s_current_artist) - 1);
+            s_current_artist[sizeof(s_current_artist) - 1] = '\0';
 
-        ui_update_track(s_current_title, s_current_artist, SOURCE_BLUETOOTH);
-        ui_update_progress(0, s_track_duration_ms);
+            s_playback_start_ms = millis();
+            s_track_duration_ms = track->duration_ms;
 
-        // Clear previous lyrics and trigger async fetch from LRCLIB on Core 1
-        ui_update_lyrics(NULL);
-        lyrics_fetch_async(s_current_title, s_current_artist, on_lyrics_loaded);
+            ui_update_track(s_current_title, s_current_artist, SOURCE_BLUETOOTH);
+            ui_update_progress(0, s_track_duration_ms);
+
+            // Clear previous lyrics and trigger async fetch from LRCLIB on Core 1
+            ui_update_lyrics(NULL);
+            lyrics_fetch_async(s_current_title, s_current_artist, on_lyrics_loaded);
+        }
+        xSemaphoreGive(s_state_mutex);
     }
 }
 
 static void on_bt_status_changed(bool is_playing) {
     log_i("BT Playback Status changed: %s", is_playing ? "PLAYING" : "STOPPED/PAUSED");
-    if (is_playing) {
-        s_is_playing = true;
-        s_playback_start_ms = millis();
-        handle_system_audio_event(EVENT_BT_START);
-    } else {
-        s_is_playing = false;
-        handle_system_audio_event(EVENT_BT_STOP);
-    }
+    // Mutate state exclusively through arbitration to prevent decoupling or freezing active streams
+    handle_system_audio_event(is_playing ? EVENT_BT_START : EVENT_BT_STOP);
 }
 
 // =============================================================================
@@ -149,38 +158,39 @@ static void on_airplay_track_changed(const char *title, const char *artist, cons
     log_i("AirPlay Track Notification: '%s' - '%s'",
           title ? title : "", artist ? artist : "");
 
-    if (s_system_audio_state == STATE_AIRPLAY_PLAYING || s_system_audio_state == STATE_IDLE) {
-        if (title && *title) {
-            strncpy(s_current_title, title, sizeof(s_current_title) - 1);
-            s_current_title[sizeof(s_current_title) - 1] = '\0';
+    if (s_state_mutex == NULL) {
+        return;
+    }
+
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_system_audio_state == STATE_AIRPLAY_PLAYING || s_system_audio_state == STATE_IDLE) {
+            if (title && *title) {
+                strncpy(s_current_title, title, sizeof(s_current_title) - 1);
+                s_current_title[sizeof(s_current_title) - 1] = '\0';
+            }
+            if (artist && *artist) {
+                strncpy(s_current_artist, artist, sizeof(s_current_artist) - 1);
+                s_current_artist[sizeof(s_current_artist) - 1] = '\0';
+            }
+
+            s_playback_start_ms = millis();
+            s_track_duration_ms = 0; // AirPlay RTSP/DAAP stream progress interpolates locally
+
+            ui_update_track(s_current_title, s_current_artist, SOURCE_AIRPLAY);
+            ui_update_progress(0, 0);
+
+            // Clear previous lyrics and trigger async fetch from LRCLIB on Core 1
+            ui_update_lyrics(NULL);
+            lyrics_fetch_async(s_current_title, s_current_artist, on_lyrics_loaded);
         }
-        if (artist && *artist) {
-            strncpy(s_current_artist, artist, sizeof(s_current_artist) - 1);
-            s_current_artist[sizeof(s_current_artist) - 1] = '\0';
-        }
-
-        s_playback_start_ms = millis();
-        s_track_duration_ms = 0; // AirPlay RTSP/DAAP stream progress interpolates locally
-
-        ui_update_track(s_current_title, s_current_artist, SOURCE_AIRPLAY);
-        ui_update_progress(0, 0);
-
-        // Clear previous lyrics and trigger async fetch from LRCLIB on Core 1
-        ui_update_lyrics(NULL);
-        lyrics_fetch_async(s_current_title, s_current_artist, on_lyrics_loaded);
+        xSemaphoreGive(s_state_mutex);
     }
 }
 
 static void on_airplay_status_changed(bool is_active) {
     log_i("AirPlay Session Status changed: %s", is_active ? "ACTIVE" : "INACTIVE");
-    if (is_active) {
-        s_is_playing = true;
-        s_playback_start_ms = millis();
-        handle_system_audio_event(EVENT_AIRPLAY_START);
-    } else {
-        s_is_playing = false;
-        handle_system_audio_event(EVENT_AIRPLAY_STOP);
-    }
+    // Mutate state exclusively through arbitration to prevent decoupling or freezing active streams
+    handle_system_audio_event(is_active ? EVENT_AIRPLAY_START : EVENT_AIRPLAY_STOP);
 }
 
 // =============================================================================
