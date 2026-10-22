@@ -114,6 +114,8 @@ bool lrc_parse(const char *raw_lrc, LyricsData *out) {
 
     out->count = 0;
     out->loaded = false;
+    out->title[0] = '\0';
+    out->artist[0] = '\0';
 
     const char *line_start = raw_lrc;
     while (*line_start != '\0') {
@@ -327,6 +329,7 @@ static volatile bool s_service_running = false;
 
 // Statically allocated in BSS (not on task stack) to prevent FreeRTOS stack overflow
 static LyricsData s_worker_lyrics_data;
+static LyricsData s_error_lyrics_data;
 
 static void lyrics_worker_task(void *pvParameters) {
     (void)pvParameters;
@@ -339,11 +342,12 @@ static void lyrics_worker_task(void *pvParameters) {
             }
 
             memset(&s_worker_lyrics_data, 0, sizeof(s_worker_lyrics_data));
-            strncpy(s_worker_lyrics_data.title, req.title, sizeof(s_worker_lyrics_data.title) - 1);
-            strncpy(s_worker_lyrics_data.artist, req.artist, sizeof(s_worker_lyrics_data.artist) - 1);
+            // Do not pre-populate title and artist so lrc_parse can extract [ti:] and [ar:] from tags.
 
             if (WiFi.status() != WL_CONNECTED) {
                 if (req.callback) {
+                    if (req.title[0] != '\0') strncpy(s_worker_lyrics_data.title, req.title, sizeof(s_worker_lyrics_data.title) - 1);
+                    if (req.artist[0] != '\0') strncpy(s_worker_lyrics_data.artist, req.artist, sizeof(s_worker_lyrics_data.artist) - 1);
                     req.callback(&s_worker_lyrics_data, false);
                 }
                 continue;
@@ -376,19 +380,20 @@ static void lyrics_worker_task(void *pvParameters) {
                     const char *synced_lyrics = doc["syncedLyrics"];
                     if (synced_lyrics && strlen(synced_lyrics) > 0) {
                         if (lrc_parse(synced_lyrics, &s_worker_lyrics_data)) {
-                            // Ensure title/artist are preserved if not extracted from tags
-                            if (s_worker_lyrics_data.title[0] == '\0') {
-                                strncpy(s_worker_lyrics_data.title, req.title, sizeof(s_worker_lyrics_data.title) - 1);
-                            }
-                            if (s_worker_lyrics_data.artist[0] == '\0') {
-                                strncpy(s_worker_lyrics_data.artist, req.artist, sizeof(s_worker_lyrics_data.artist) - 1);
-                            }
                             parsed_ok = true;
                         }
                     }
                 }
             }
             http.end();
+
+            // Fallback to request title/artist if not present in LRC metadata tags
+            if (s_worker_lyrics_data.title[0] == '\0') {
+                strncpy(s_worker_lyrics_data.title, req.title, sizeof(s_worker_lyrics_data.title) - 1);
+            }
+            if (s_worker_lyrics_data.artist[0] == '\0') {
+                strncpy(s_worker_lyrics_data.artist, req.artist, sizeof(s_worker_lyrics_data.artist) - 1);
+            }
 
             if (req.callback) {
                 req.callback(&s_worker_lyrics_data, parsed_ok);
@@ -440,14 +445,18 @@ void lyrics_service_stop(void) {
 
     s_service_running = false;
 
+    // Wake worker task if waiting on queue
     if (s_lyrics_queue) {
         LyricsRequest wake_req;
         memset(&wake_req, 0, sizeof(wake_req));
         xQueueSend(s_lyrics_queue, &wake_req, 0);
     }
 
+    // Wait gracefully for worker task to terminate cleanly
     if (s_lyrics_task_handle != NULL) {
-        vTaskDelay(pdMS_TO_TICKS(50));
+        for (int i = 0; i < 30 && s_lyrics_task_handle != NULL; i++) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
         if (s_lyrics_task_handle != NULL) {
             vTaskDelete(s_lyrics_task_handle);
             s_lyrics_task_handle = NULL;
@@ -463,11 +472,11 @@ void lyrics_service_stop(void) {
 void lyrics_fetch_async(const char *title, const char *artist, LyricsLoadedCallback cb) {
     if (!s_service_running || !s_lyrics_queue) {
         if (cb) {
-            LyricsData empty_data;
-            memset(&empty_data, 0, sizeof(empty_data));
-            if (title) strncpy(empty_data.title, title, sizeof(empty_data.title) - 1);
-            if (artist) strncpy(empty_data.artist, artist, sizeof(empty_data.artist) - 1);
-            cb(&empty_data, false);
+            memset(&s_error_lyrics_data, 0, sizeof(s_error_lyrics_data));
+            if (title) strncpy(s_error_lyrics_data.title, title, sizeof(s_error_lyrics_data.title) - 1);
+            if (artist) strncpy(s_error_lyrics_data.artist, artist, sizeof(s_error_lyrics_data.artist) - 1);
+            s_error_lyrics_data.loaded = false;
+            cb(&s_error_lyrics_data, false);
         }
         return;
     }

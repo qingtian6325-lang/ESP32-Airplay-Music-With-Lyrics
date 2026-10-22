@@ -340,6 +340,90 @@ void test_lyrics_service_async_mock_failure(void) {
     lyrics_service_stop();
 }
 
+// 14. Uninitialized struct tag extraction test
+void test_lrc_parse_uninitialized_struct_tag_extraction(void) {
+    LyricsData lrc;
+    // Fill with non-zero garbage bytes to simulate dirty stack
+    memset(&lrc, 0xAA, sizeof(lrc));
+
+    const char *sample = 
+        "[ti:Bohemian Rhapsody]\n"
+        "[ar:Queen]\n"
+        "[00:01.00]Is this the real life?\n";
+
+    TEST_ASSERT_TRUE(lrc_parse(sample, &lrc));
+    TEST_ASSERT_EQUAL_STRING("Bohemian Rhapsody", lrc.title);
+    TEST_ASSERT_EQUAL_STRING("Queen", lrc.artist);
+    TEST_ASSERT_EQUAL_UINT32(1, lrc.count);
+    TEST_ASSERT_TRUE(lrc.loaded);
+}
+
+// 15. Uninitialized struct without tags test
+void test_lrc_parse_uninitialized_struct_no_tags(void) {
+    LyricsData lrc;
+    memset(&lrc, 0x55, sizeof(lrc));
+
+    const char *sample = "[00:01.00]Is this the real life?\n";
+
+    TEST_ASSERT_TRUE(lrc_parse(sample, &lrc));
+    TEST_ASSERT_EQUAL_STRING("", lrc.title);
+    TEST_ASSERT_EQUAL_STRING("", lrc.artist);
+    TEST_ASSERT_EQUAL_UINT32(1, lrc.count);
+    TEST_ASSERT_TRUE(lrc.loaded);
+}
+
+// 16. Stopped service error callback without stack allocation
+void test_lyrics_service_stopped_service_callback(void) {
+    lyrics_service_stop();
+
+    lyrics_fetch_async("Song Title", "Artist Name", on_lyrics_loaded_test);
+
+    TEST_ASSERT_EQUAL_INT(1, s_callback_invocations);
+    TEST_ASSERT_FALSE(s_received_success);
+    TEST_ASSERT_FALSE(s_received_lyrics.loaded);
+    TEST_ASSERT_EQUAL_STRING("Song Title", s_received_lyrics.title);
+    TEST_ASSERT_EQUAL_STRING("Artist Name", s_received_lyrics.artist);
+}
+
+// 17. LRC tags override request metadata
+void test_lyrics_service_lrc_tags_override_request_meta(void) {
+    TEST_ASSERT_TRUE(lyrics_service_init());
+
+    const char *sample = 
+        "[ti:Tag Title]\n"
+        "[ar:Tag Artist]\n"
+        "[00:10.00]Lyrics text\n";
+
+    lyrics_mock_set_response(sample, true);
+
+    lyrics_fetch_async("Req Title", "Req Artist", on_lyrics_loaded_test);
+
+    TEST_ASSERT_EQUAL_INT(1, s_callback_invocations);
+    TEST_ASSERT_TRUE(s_received_success);
+    TEST_ASSERT_EQUAL_STRING("Tag Title", s_received_lyrics.title);
+    TEST_ASSERT_EQUAL_STRING("Tag Artist", s_received_lyrics.artist);
+
+    lyrics_service_stop();
+}
+
+// 18. Fallback to request metadata when no tags are present
+void test_lyrics_service_fallback_to_request_meta_when_no_tags(void) {
+    TEST_ASSERT_TRUE(lyrics_service_init());
+
+    const char *sample = "[00:10.00]Lyrics without tags\n";
+
+    lyrics_mock_set_response(sample, true);
+
+    lyrics_fetch_async("Fallback Title", "Fallback Artist", on_lyrics_loaded_test);
+
+    TEST_ASSERT_EQUAL_INT(1, s_callback_invocations);
+    TEST_ASSERT_TRUE(s_received_success);
+    TEST_ASSERT_EQUAL_STRING("Fallback Title", s_received_lyrics.title);
+    TEST_ASSERT_EQUAL_STRING("Fallback Artist", s_received_lyrics.artist);
+
+    lyrics_service_stop();
+}
+
 #if defined(ARDUINO)
 void setup() {
     UNITY_BEGIN();
@@ -356,6 +440,11 @@ void setup() {
     RUN_TEST(test_url_encode);
     RUN_TEST(test_lyrics_service_async_mock);
     RUN_TEST(test_lyrics_service_async_mock_failure);
+    RUN_TEST(test_lrc_parse_uninitialized_struct_tag_extraction);
+    RUN_TEST(test_lrc_parse_uninitialized_struct_no_tags);
+    RUN_TEST(test_lyrics_service_stopped_service_callback);
+    RUN_TEST(test_lyrics_service_lrc_tags_override_request_meta);
+    RUN_TEST(test_lyrics_service_fallback_to_request_meta_when_no_tags);
     UNITY_END();
 }
 void loop() {}
@@ -377,6 +466,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_url_encode);
     RUN_TEST(test_lyrics_service_async_mock);
     RUN_TEST(test_lyrics_service_async_mock_failure);
+    RUN_TEST(test_lrc_parse_uninitialized_struct_tag_extraction);
+    RUN_TEST(test_lrc_parse_uninitialized_struct_no_tags);
+    RUN_TEST(test_lyrics_service_stopped_service_callback);
+    RUN_TEST(test_lyrics_service_lrc_tags_override_request_meta);
+    RUN_TEST(test_lyrics_service_fallback_to_request_meta_when_no_tags);
     return UNITY_END();
 }
 #endif
