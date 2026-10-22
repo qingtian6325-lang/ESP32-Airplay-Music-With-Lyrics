@@ -49,6 +49,36 @@
 #define CORE_UI             1       // Core 1: LVGL UI rendering, HTTP lyrics fetch
 
 // =============================================================================
+// Wi-Fi Network Credentials (Default)
+// =============================================================================
+#ifndef WIFI_SSID
+#define WIFI_SSID           "Your_WiFi_SSID"
+#endif
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD       "Your_WiFi_Password"
+#endif
+
+// =============================================================================
+// Lyrics Provider Configuration (lrc.cx + LRCLIB Cascading Fallback)
+// =============================================================================
+#define LYRICS_PROVIDER_LRCCX       1   // Official public lrc.cx (LrcAPI)
+#define LYRICS_PROVIDER_LRCLIB      2   // Community LRCLIB open database
+
+// Preferred provider (default: lrc.cx for superior Mandopop/Cantopop/global coverage)
+#ifndef LYRICS_DEFAULT_PROVIDER
+#define LYRICS_DEFAULT_PROVIDER     LYRICS_PROVIDER_LRCCX
+#endif
+
+// Enable fallback to secondary provider if primary returns 404 or fails
+#ifndef LYRICS_ENABLE_FALLBACK
+#define LYRICS_ENABLE_FALLBACK      1   // 1 = enabled, 0 = disabled
+#endif
+
+// Public API endpoints
+#define LRC_CX_API_ENDPOINT        "https://api.lrc.cx/lyrics"
+#define LRCLIB_API_ENDPOINT        "https://lrclib.net/api/get"
+
+// =============================================================================
 // Compile-time PSRAM Safety Asserts
 // =============================================================================
 #if defined(__cplusplus)

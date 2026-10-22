@@ -1,5 +1,6 @@
 #include <unity.h>
 #include "config.h"
+#include <string.h>
 
 void setUp(void) {
 }
@@ -46,6 +47,15 @@ void test_spi_pin_assignments(void) {
     TEST_ASSERT_EQUAL_INT(21, TFT_BLK_PIN);
 }
 
+void test_lyrics_configuration(void) {
+    TEST_ASSERT_EQUAL_INT(1, LYRICS_PROVIDER_LRCCX);
+    TEST_ASSERT_EQUAL_INT(2, LYRICS_PROVIDER_LRCLIB);
+    TEST_ASSERT_EQUAL_INT(LYRICS_PROVIDER_LRCCX, LYRICS_DEFAULT_PROVIDER);
+    TEST_ASSERT_EQUAL_INT(1, LYRICS_ENABLE_FALLBACK);
+    TEST_ASSERT_TRUE(strstr(LRC_CX_API_ENDPOINT, "api.lrc.cx") != NULL);
+    TEST_ASSERT_TRUE(strstr(LRCLIB_API_ENDPOINT, "lrclib.net") != NULL);
+}
+
 #if defined(ARDUINO)
 void setup() {
     delay(2000);
@@ -53,6 +63,7 @@ void setup() {
     RUN_TEST(test_forbidden_pins_not_used);
     RUN_TEST(test_i2s_pin_assignments);
     RUN_TEST(test_spi_pin_assignments);
+    RUN_TEST(test_lyrics_configuration);
     UNITY_END();
 }
 void loop() {}
@@ -62,6 +73,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_forbidden_pins_not_used);
     RUN_TEST(test_i2s_pin_assignments);
     RUN_TEST(test_spi_pin_assignments);
+    RUN_TEST(test_lyrics_configuration);
     return UNITY_END();
 }
 #endif

@@ -86,7 +86,8 @@ void lyrics_service_stop(void);
 /**
  * @brief Request lyrics for the specified track asynchronously.
  *
- * Queries LRCLIB API on Core 1 (CORE_UI) without blocking Core 0 audio playback.
+ * Queries preferred provider (lrc.cx) on Core 1 (CORE_UI) with automatic fallback
+ * to LRCLIB without blocking Core 0 audio playback.
  * Invokes callback upon completion or failure.
  *
  * @param title Track title.
@@ -100,6 +101,8 @@ void lyrics_fetch_async(const char *title, const char *artist, LyricsLoadedCallb
  * @brief Host mock helpers for testing without ESP32 hardware or network.
  */
 void lyrics_mock_set_response(const char *raw_lrc, bool success);
+void lyrics_mock_set_provider_response(int provider, const char *raw_lrc, bool success);
+int lyrics_mock_get_last_queried_provider(void);
 void lyrics_mock_reset(void);
 #endif
 

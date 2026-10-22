@@ -1,4 +1,5 @@
 #include "lyrics_service.h"
+#include "config.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,14 +159,11 @@ bool lrc_parse(const char *raw_lrc, LyricsData *out) {
                 size_t num_ts = 0;
 
                 while (p < line_end) {
-                    while (p < line_end && (*p == ' ' || *p == '\t')) p++;
-                    if (p >= line_end || *p != '[') break;
-
-                    uint32_t ts = 0;
+                    uint32_t ts_ms = 0;
                     int tag_len = 0;
-                    if (parse_timestamp_tag(p, &ts, &tag_len)) {
-                        if (num_ts < 32) {
-                            timestamps[num_ts++] = ts;
+                    if (parse_timestamp_tag(p, &ts_ms, &tag_len)) {
+                        if (num_ts < sizeof(timestamps) / sizeof(timestamps[0])) {
+                            timestamps[num_ts++] = ts_ms;
                         }
                         p += tag_len;
                     } else {
@@ -174,29 +172,34 @@ bool lrc_parse(const char *raw_lrc, LyricsData *out) {
                 }
 
                 if (num_ts > 0) {
-                    // Skip spaces after tags before text
-                    while (p < line_end && (*p == ' ' || *p == '\t')) p++;
+                    // Skip leading whitespace on the text portion
+                    while (p < line_end && (*p == ' ' || *p == '\t')) {
+                        p++;
+                    }
 
+                    // Trim trailing CR / whitespace
                     const char *text_end = line_end;
-                    // Trim trailing \r, \n, spaces, and tabs
-                    while (text_end > p && (*(text_end - 1) == '\r' || *(text_end - 1) == '\n' ||
-                                            *(text_end - 1) == ' ' || *(text_end - 1) == '\t')) {
+                    while (text_end > p && (*(text_end - 1) == '\r' || *(text_end - 1) == ' ' || *(text_end - 1) == '\t')) {
                         text_end--;
                     }
 
                     size_t text_len = text_end - p;
-                    if (text_len >= MAX_LRC_LINE_LEN) {
-                        text_len = MAX_LRC_LINE_LEN - 1;
+                    char line_buf[MAX_LRC_LINE_LEN];
+                    if (text_len >= sizeof(line_buf)) {
+                        text_len = sizeof(line_buf) - 1;
                     }
+                    if (text_len > 0) {
+                        memcpy(line_buf, p, text_len);
+                    }
+                    line_buf[text_len] = '\0';
 
+                    // Insert lyric lines for each timestamp parsed
                     for (size_t i = 0; i < num_ts; i++) {
                         if (out->count < MAX_LRC_LINES) {
-                            LyricLine *l = &out->lines[out->count++];
-                            l->time_ms = timestamps[i];
-                            if (text_len > 0) {
-                                memcpy(l->text, p, text_len);
-                            }
-                            l->text[text_len] = '\0';
+                            out->lines[out->count].time_ms = timestamps[i];
+                            strncpy(out->lines[out->count].text, line_buf, sizeof(out->lines[out->count].text) - 1);
+                            out->lines[out->count].text[sizeof(out->lines[out->count].text) - 1] = '\0';
+                            out->count++;
                         }
                     }
                 }
@@ -210,21 +213,17 @@ bool lrc_parse(const char *raw_lrc, LyricsData *out) {
         }
     }
 
-    if (out->count == 0) {
-        return false;
+    if (out->count > 0) {
+        qsort(out->lines, out->count, sizeof(LyricLine), compare_lyric_lines);
+        out->loaded = true;
+        return true;
     }
 
-    qsort(out->lines, out->count, sizeof(LyricLine), compare_lyric_lines);
-    out->loaded = true;
-    return true;
+    return false;
 }
 
 int lrc_get_active_index_at(const LyricsData *data, uint32_t ms) {
     if (!data || !data->loaded || data->count == 0) {
-        return -1;
-    }
-
-    if (ms < data->lines[0].time_ms) {
         return -1;
     }
 
@@ -234,7 +233,7 @@ int lrc_get_active_index_at(const LyricsData *data, uint32_t ms) {
 
     int low = 0;
     int high = (int)data->count - 1;
-    int best = 0;
+    int best = -1;
 
     while (low <= high) {
         int mid = low + (high - low) / 2;
@@ -265,49 +264,42 @@ const char* lrc_get_line_at(const LyricsData *data, uint32_t ms, int offset_line
 }
 
 void url_encode(const char *src, char *dst, size_t dst_len) {
-    if (!dst || dst_len == 0) return;
-    dst[0] = '\0';
-    if (!src) return;
+    if (!src || !dst || dst_len == 0) {
+        if (dst && dst_len > 0) dst[0] = '\0';
+        return;
+    }
 
-    size_t out_idx = 0;
-    static const char hex[] = "0123456789ABCDEF";
+    static const char *hex = "0123456789ABCDEF";
+    size_t written = 0;
 
-    while (*src != '\0' && out_idx + 1 < dst_len) {
+    while (*src != '\0' && written + 1 < dst_len) {
         unsigned char c = (unsigned char)*src;
+        // Unreserved characters: A-Z, a-z, 0-9, '-', '_', '.', '~'
         if ((c >= 'a' && c <= 'z') ||
             (c >= 'A' && c <= 'Z') ||
             (c >= '0' && c <= '9') ||
             c == '-' || c == '_' || c == '.' || c == '~') {
-            dst[out_idx++] = c;
-        } else if (c == ' ') {
-            if (out_idx + 3 < dst_len) {
-                dst[out_idx++] = '%';
-                dst[out_idx++] = '2';
-                dst[out_idx++] = '0';
-            } else {
-                break;
-            }
+            dst[written++] = c;
         } else {
-            if (out_idx + 3 < dst_len) {
-                dst[out_idx++] = '%';
-                dst[out_idx++] = hex[(c >> 4) & 0x0F];
-                dst[out_idx++] = hex[c & 0x0F];
-            } else {
-                break;
+            if (written + 4 > dst_len) {
+                break; // Not enough room for %XX + null terminator
             }
+            dst[written++] = '%';
+            dst[written++] = hex[(c >> 4) & 0x0F];
+            dst[written++] = hex[c & 0x0F];
         }
         src++;
     }
-    dst[out_idx] = '\0';
+
+    dst[written] = '\0';
 }
 
 // =============================================================================
-// FreeRTOS Asynchronous HTTP Client Implementation (ESP32-WROVER-E on CORE_UI)
+// Platform-Specific Implementation (FreeRTOS / Core 1 vs Host Mock)
 // =============================================================================
 
-#if (defined(ESP_PLATFORM) || defined(ARDUINO)) && !defined(ARDUINO_ARCH_NATIVE)
+#if defined(ESP_PLATFORM) || defined(ARDUINO)
 
-#include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -315,7 +307,6 @@ void url_encode(const char *src, char *dst, size_t dst_len) {
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
-#include "config.h"
 
 typedef struct {
     char title[128];
@@ -329,6 +320,65 @@ static volatile bool s_service_running = false;
 
 // Dynamically allocated in PSRAM / heap to prevent .dram0.bss overflow
 static LyricsData *s_worker_lyrics_data = NULL;
+
+static bool query_lrccx_provider(const char *enc_title, const char *enc_artist, LyricsData *out) {
+    char url[600];
+    if (enc_artist && enc_artist[0] != '\0') {
+        snprintf(url, sizeof(url), "%s?title=%s&artist=%s", LRC_CX_API_ENDPOINT, enc_title, enc_artist);
+    } else {
+        snprintf(url, sizeof(url), "%s?title=%s", LRC_CX_API_ENDPOINT, enc_title);
+    }
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.begin(client, url);
+    http.setUserAgent("ESP32-Lyrics-Speaker/1.0");
+    http.setTimeout(4000);
+
+    int httpCode = http.GET();
+    bool ok = false;
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        if (payload.length() > 0) {
+            if (lrc_parse(payload.c_str(), out)) {
+                ok = true;
+            }
+        }
+    }
+    http.end();
+    return ok;
+}
+
+static bool query_lrclib_provider(const char *enc_title, const char *enc_artist, LyricsData *out) {
+    char url[600];
+    snprintf(url, sizeof(url), "%s?track_name=%s&artist_name=%s", LRCLIB_API_ENDPOINT, enc_title, enc_artist);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.begin(client, url);
+    http.setUserAgent("ESP32-Lyrics-Speaker/1.0");
+    http.setTimeout(4000);
+
+    int httpCode = http.GET();
+    bool ok = false;
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, payload);
+        if (!err) {
+            const char *synced_lyrics = doc["syncedLyrics"];
+            if (synced_lyrics && strlen(synced_lyrics) > 0) {
+                if (lrc_parse(synced_lyrics, out)) {
+                    ok = true;
+                }
+            }
+        }
+    }
+    http.end();
+    return ok;
+}
 
 static void lyrics_worker_task(void *pvParameters) {
     (void)pvParameters;
@@ -360,34 +410,25 @@ static void lyrics_worker_task(void *pvParameters) {
             url_encode(req.artist, enc_artist, sizeof(enc_artist));
             url_encode(req.title, enc_title, sizeof(enc_title));
 
-            char url[600];
-            snprintf(url, sizeof(url), "https://lrclib.net/api/get?artist_name=%s&track_name=%s",
-                     enc_artist, enc_title);
-
-            WiFiClientSecure client;
-            client.setInsecure(); // Skip certificate verification for performance
-            HTTPClient http;
-            http.begin(client, url);
-            http.setUserAgent("ESP32-Lyrics-Speaker/1.0");
-            http.setTimeout(5000);
-
-            int httpCode = http.GET();
             bool parsed_ok = false;
+            int primary = LYRICS_DEFAULT_PROVIDER;
+            int secondary = (primary == LYRICS_PROVIDER_LRCCX) ? LYRICS_PROVIDER_LRCLIB : LYRICS_PROVIDER_LRCCX;
 
-            if (httpCode == HTTP_CODE_OK) {
-                String payload = http.getString();
-                JsonDocument doc;
-                DeserializationError err = deserializeJson(doc, payload);
-                if (!err) {
-                    const char *synced_lyrics = doc["syncedLyrics"];
-                    if (synced_lyrics && strlen(synced_lyrics) > 0) {
-                        if (lrc_parse(synced_lyrics, s_worker_lyrics_data)) {
-                            parsed_ok = true;
-                        }
-                    }
+            // 1. Query preferred primary provider
+            if (primary == LYRICS_PROVIDER_LRCCX) {
+                parsed_ok = query_lrccx_provider(enc_title, enc_artist, s_worker_lyrics_data);
+            } else {
+                parsed_ok = query_lrclib_provider(enc_title, enc_artist, s_worker_lyrics_data);
+            }
+
+            // 2. Cascade fallback to secondary provider if primary failed
+            if (!parsed_ok && LYRICS_ENABLE_FALLBACK) {
+                if (secondary == LYRICS_PROVIDER_LRCCX) {
+                    parsed_ok = query_lrccx_provider(enc_title, enc_artist, s_worker_lyrics_data);
+                } else {
+                    parsed_ok = query_lrclib_provider(enc_title, enc_artist, s_worker_lyrics_data);
                 }
             }
-            http.end();
 
             // Fallback to request title/artist if not present in LRC metadata tags
             if (s_worker_lyrics_data->title[0] == '\0') {
@@ -521,8 +562,13 @@ void lyrics_fetch_async(const char *title, const char *artist, LyricsLoadedCallb
 // =============================================================================
 
 static bool s_mock_initialized = false;
-static bool s_mock_success = false;
-static char s_mock_raw_lrc[16384] = {0};
+static bool s_mock_lrccx_success = false;
+static char s_mock_lrccx_raw_lrc[16384] = {0};
+
+static bool s_mock_lrclib_success = false;
+static char s_mock_lrclib_raw_lrc[16384] = {0};
+
+static int s_mock_last_provider = 0;
 static LyricsData s_mock_lyrics_data;
 
 bool lyrics_service_init(void) {
@@ -535,12 +581,50 @@ void lyrics_service_stop(void) {
     lyrics_mock_reset();
 }
 
+int lyrics_mock_get_last_queried_provider(void) {
+    return s_mock_last_provider;
+}
+
+void lyrics_mock_set_response(const char *raw_lrc, bool success) {
+    // Default legacy setter sets primary provider (lrc.cx)
+    lyrics_mock_set_provider_response(LYRICS_DEFAULT_PROVIDER, raw_lrc, success);
+}
+
+void lyrics_mock_set_provider_response(int provider, const char *raw_lrc, bool success) {
+    if (provider == LYRICS_PROVIDER_LRCCX) {
+        s_mock_lrccx_success = success;
+        if (raw_lrc) {
+            strncpy(s_mock_lrccx_raw_lrc, raw_lrc, sizeof(s_mock_lrccx_raw_lrc) - 1);
+            s_mock_lrccx_raw_lrc[sizeof(s_mock_lrccx_raw_lrc) - 1] = '\0';
+        } else {
+            s_mock_lrccx_raw_lrc[0] = '\0';
+        }
+    } else if (provider == LYRICS_PROVIDER_LRCLIB) {
+        s_mock_lrclib_success = success;
+        if (raw_lrc) {
+            strncpy(s_mock_lrclib_raw_lrc, raw_lrc, sizeof(s_mock_lrclib_raw_lrc) - 1);
+            s_mock_lrclib_raw_lrc[sizeof(s_mock_lrclib_raw_lrc) - 1] = '\0';
+        } else {
+            s_mock_lrclib_raw_lrc[0] = '\0';
+        }
+    }
+}
+
+void lyrics_mock_reset(void) {
+    s_mock_lrccx_success = false;
+    s_mock_lrccx_raw_lrc[0] = '\0';
+    s_mock_lrclib_success = false;
+    s_mock_lrclib_raw_lrc[0] = '\0';
+    s_mock_last_provider = 0;
+    memset(&s_mock_lyrics_data, 0, sizeof(s_mock_lyrics_data));
+}
+
 void lyrics_fetch_async(const char *title, const char *artist, LyricsLoadedCallback cb) {
     memset(&s_mock_lyrics_data, 0, sizeof(s_mock_lyrics_data));
     if (title) strncpy(s_mock_lyrics_data.title, title, sizeof(s_mock_lyrics_data.title) - 1);
     if (artist) strncpy(s_mock_lyrics_data.artist, artist, sizeof(s_mock_lyrics_data.artist) - 1);
 
-    if (!s_mock_initialized || !s_mock_success) {
+    if (!s_mock_initialized) {
         s_mock_lyrics_data.loaded = false;
         if (cb) {
             cb(&s_mock_lyrics_data, false);
@@ -548,7 +632,31 @@ void lyrics_fetch_async(const char *title, const char *artist, LyricsLoadedCallb
         return;
     }
 
-    bool parsed = lrc_parse(s_mock_raw_lrc, &s_mock_lyrics_data);
+    int primary = LYRICS_DEFAULT_PROVIDER;
+    int secondary = (primary == LYRICS_PROVIDER_LRCCX) ? LYRICS_PROVIDER_LRCLIB : LYRICS_PROVIDER_LRCCX;
+
+    bool parsed = false;
+
+    // 1. Query primary provider
+    s_mock_last_provider = primary;
+    bool primary_ok = (primary == LYRICS_PROVIDER_LRCCX) ? s_mock_lrccx_success : s_mock_lrclib_success;
+    const char *primary_lrc = (primary == LYRICS_PROVIDER_LRCCX) ? s_mock_lrccx_raw_lrc : s_mock_lrclib_raw_lrc;
+
+    if (primary_ok && primary_lrc && primary_lrc[0] != '\0') {
+        parsed = lrc_parse(primary_lrc, &s_mock_lyrics_data);
+    }
+
+    // 2. Cascade fallback to secondary provider if primary failed
+    if (!parsed && LYRICS_ENABLE_FALLBACK) {
+        s_mock_last_provider = secondary;
+        bool secondary_ok = (secondary == LYRICS_PROVIDER_LRCCX) ? s_mock_lrccx_success : s_mock_lrclib_success;
+        const char *secondary_lrc = (secondary == LYRICS_PROVIDER_LRCCX) ? s_mock_lrccx_raw_lrc : s_mock_lrclib_raw_lrc;
+
+        if (secondary_ok && secondary_lrc && secondary_lrc[0] != '\0') {
+            parsed = lrc_parse(secondary_lrc, &s_mock_lyrics_data);
+        }
+    }
+
     // Retain title/artist if not specified in LRC metadata headers
     if (s_mock_lyrics_data.title[0] == '\0' && title) {
         strncpy(s_mock_lyrics_data.title, title, sizeof(s_mock_lyrics_data.title) - 1);
@@ -560,22 +668,6 @@ void lyrics_fetch_async(const char *title, const char *artist, LyricsLoadedCallb
     if (cb) {
         cb(&s_mock_lyrics_data, parsed);
     }
-}
-
-void lyrics_mock_set_response(const char *raw_lrc, bool success) {
-    s_mock_success = success;
-    if (raw_lrc) {
-        strncpy(s_mock_raw_lrc, raw_lrc, sizeof(s_mock_raw_lrc) - 1);
-        s_mock_raw_lrc[sizeof(s_mock_raw_lrc) - 1] = '\0';
-    } else {
-        s_mock_raw_lrc[0] = '\0';
-    }
-}
-
-void lyrics_mock_reset(void) {
-    s_mock_success = false;
-    s_mock_raw_lrc[0] = '\0';
-    memset(&s_mock_lyrics_data, 0, sizeof(s_mock_lyrics_data));
 }
 
 #endif
