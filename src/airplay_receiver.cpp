@@ -106,7 +106,7 @@ static void rtp_audio_task(void *pvParameters) {
         int packet_size = s_rtp_udp.parsePacket();
         if (packet_size > 12) {
             int bytes_read = s_rtp_udp.read(packet_buffer, sizeof(packet_buffer));
-            if (bytes_read > 12) {
+            if (bytes_read > 12 && s_is_active) {
                 // RTP header is 12 bytes. Audio payload follows immediately.
                 const uint8_t *audio_data = packet_buffer + 12;
                 size_t audio_len = (size_t)(bytes_read - 12);
@@ -117,6 +117,7 @@ static void rtp_audio_task(void *pvParameters) {
         }
     }
 
+    s_rtp_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
@@ -240,11 +241,14 @@ static void rtsp_server_task(void *pvParameters) {
                 }
             }
             client.stop();
+            // Reset active state so abnormal client disconnects reset playback state
+            set_airplay_active(false);
         } else {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
 
+    s_rtsp_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
@@ -258,6 +262,13 @@ bool airplay_receiver_init(const char *service_name) {
     if (!MDNS.begin(s_service_name)) {
         log_w("MDNS responder failed to initialize, continuing...");
     } else {
+        uint8_t mac[6];
+        WiFi.macAddress(mac);
+        char raop_instance[96];
+        snprintf(raop_instance, sizeof(raop_instance), "%02X%02X%02X%02X%02X%02X@%s",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], s_service_name);
+        MDNS.setInstanceName(raop_instance);
+
         MDNS.addService("raop", "tcp", 5000);
         MDNS.addServiceTxt("raop", "tcp", "cn", "0,1");
         MDNS.addServiceTxt("raop", "tcp", "ch", "2");
@@ -285,6 +296,9 @@ bool airplay_receiver_init(const char *service_name) {
 void airplay_receiver_stop(void) {
     s_server_running = false;
     set_airplay_active(false);
+
+    // Allow tasks a short settling delay to exit loops cleanly
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     s_rtsp_server.end();
     s_rtp_udp.stop();
@@ -380,8 +394,17 @@ void airplay_mock_feed_daap_metadata(const uint8_t *payload, size_t len) {
 }
 
 void airplay_mock_feed_audio(const uint8_t *pcm_data, size_t len) {
-    if (pcm_data && len > 0) {
+    if (pcm_data && len > 0 && s_mock_active) {
         audio_i2s_write(pcm_data, len);
+    }
+}
+
+void airplay_mock_simulate_disconnect(void) {
+    if (s_mock_active) {
+        s_mock_active = false;
+        if (s_mock_status_cb) {
+            s_mock_status_cb(false);
+        }
     }
 }
 

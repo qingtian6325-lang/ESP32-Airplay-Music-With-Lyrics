@@ -277,8 +277,26 @@ void test_airplay_feed_audio(void) {
     TEST_ASSERT_TRUE(audio_i2s_init());
 
     const uint8_t dummy_pcm[128] = { 0x55 };
-    // Verifies audio routing to audio_i2s_write executes without failure
+    // When inactive, stray UDP audio packets are safely ignored
+    airplay_mock_set_active(false);
     airplay_mock_feed_audio(dummy_pcm, sizeof(dummy_pcm));
+
+    // When active, incoming PCM frames are forwarded to audio_i2s_write
+    airplay_mock_set_active(true);
+    airplay_mock_feed_audio(dummy_pcm, sizeof(dummy_pcm));
+}
+
+void test_airplay_abnormal_disconnect_resets_active(void) {
+    airplay_register_status_callback(on_status_change_test);
+    airplay_mock_set_active(true);
+    TEST_ASSERT_TRUE(airplay_is_active());
+    TEST_ASSERT_EQUAL_INT(1, s_status_cb_count);
+
+    // Abrupt network or client drop resets active state and notifies listener
+    airplay_mock_simulate_disconnect();
+    TEST_ASSERT_FALSE(airplay_is_active());
+    TEST_ASSERT_EQUAL_INT(2, s_status_cb_count);
+    TEST_ASSERT_FALSE(s_last_active);
 }
 
 void test_airplay_init_stop_state(void) {
@@ -318,6 +336,7 @@ void setup() {
     RUN_TEST(test_airplay_track_callback_registration);
     RUN_TEST(test_airplay_feed_daap_metadata);
     RUN_TEST(test_airplay_feed_audio);
+    RUN_TEST(test_airplay_abnormal_disconnect_resets_active);
     RUN_TEST(test_airplay_init_stop_state);
     UNITY_END();
 }
@@ -344,6 +363,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_airplay_track_callback_registration);
     RUN_TEST(test_airplay_feed_daap_metadata);
     RUN_TEST(test_airplay_feed_audio);
+    RUN_TEST(test_airplay_abnormal_disconnect_resets_active);
     RUN_TEST(test_airplay_init_stop_state);
     return UNITY_END();
 }

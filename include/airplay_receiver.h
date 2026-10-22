@@ -71,6 +71,7 @@ void airplay_mock_set_active(bool active);
 void airplay_mock_trigger_track(const char *title, const char *artist, const char *album);
 void airplay_mock_feed_daap_metadata(const uint8_t *payload, size_t len);
 void airplay_mock_feed_audio(const uint8_t *pcm_data, size_t len);
+void airplay_mock_simulate_disconnect(void);
 void airplay_mock_reset(void);
 #endif
 
