@@ -130,9 +130,11 @@ void ui_update_progress(uint32_t current_ms, uint32_t total_ms) {
     s_ui_state.current_ms = current_ms;
     s_ui_state.total_ms = total_ms;
 
-    compute_lyric_window(s_current_lyrics, current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+    if (!s_ui_state.ap_setup_mode) {
+        compute_lyric_window(s_current_lyrics, current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+        hw_update_lyrics_view();
+    }
     hw_update_progress_view();
-    hw_update_lyrics_view();
 }
 
 void ui_update_lyrics(const LyricsData *lyrics) {
@@ -144,13 +146,36 @@ void ui_update_lyrics(const LyricsData *lyrics) {
         }
     }
 
-    compute_lyric_window(s_current_lyrics, s_ui_state.current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
-    hw_update_lyrics_view();
+    if (!s_ui_state.ap_setup_mode) {
+        compute_lyric_window(s_current_lyrics, s_ui_state.current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+        hw_update_lyrics_view();
+    }
 }
 
 void ui_set_wifi_status(bool connected) {
     s_ui_state.wifi_connected = connected;
     hw_update_wifi_view();
+}
+
+void ui_set_ap_setup_mode(bool ap_mode, const char *ap_ssid) {
+    s_ui_state.ap_setup_mode = ap_mode;
+    if (ap_mode) {
+        const char *ssid = (ap_ssid && ap_ssid[0] != '\0') ? ap_ssid : "ESP32-Lyrics-Setup";
+        strncpy(s_ui_state.title, "Wi-Fi 配网模式", sizeof(s_ui_state.title) - 1);
+        snprintf(s_ui_state.artist, sizeof(s_ui_state.artist), "热点: %s", ssid);
+        strncpy(s_ui_state.lyric_window[0], "请连接免密热点:", sizeof(s_ui_state.lyric_window[0]) - 1);
+        strncpy(s_ui_state.lyric_window[1], ssid, sizeof(s_ui_state.lyric_window[1]) - 1);
+        strncpy(s_ui_state.lyric_window[2], "手机浏览器打开: 192.168.4.1", sizeof(s_ui_state.lyric_window[2]) - 1);
+        strncpy(s_ui_state.lyric_window[3], "选择您的 Wi-Fi 并输入密码", sizeof(s_ui_state.lyric_window[3]) - 1);
+        strncpy(s_ui_state.lyric_window[4], "保存后将自动连接", sizeof(s_ui_state.lyric_window[4]) - 1);
+        s_ui_state.active_lyric_index = 2;
+    } else {
+        s_ui_state.title[0] = '\0';
+        s_ui_state.artist[0] = '\0';
+        compute_lyric_window(s_current_lyrics, s_ui_state.current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+    }
+    hw_update_track_view();
+    hw_update_lyrics_view();
 }
 
 const UIState* ui_get_state(void) {

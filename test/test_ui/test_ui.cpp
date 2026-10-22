@@ -382,6 +382,22 @@ void test_ui_update_lyrics_clear(void) {
     TEST_ASSERT_EQUAL_STRING("", state->lyric_window[4]);
 }
 
+
+void test_ui_ap_setup_mode(void) {
+    ui_init();
+    ui_set_ap_setup_mode(true, "ESP32-Lyrics-Setup");
+
+    const UIState *state = ui_get_state();
+    TEST_ASSERT_TRUE(state->ap_setup_mode);
+    TEST_ASSERT_EQUAL_STRING("Wi-Fi 配网模式", state->title);
+    TEST_ASSERT_EQUAL_STRING("热点: ESP32-Lyrics-Setup", state->artist);
+    TEST_ASSERT_EQUAL_STRING("手机浏览器打开: 192.168.4.1", state->lyric_window[2]);
+
+    // Exit AP mode
+    ui_set_ap_setup_mode(false, NULL);
+    TEST_ASSERT_FALSE(state->ap_setup_mode);
+}
+
 void test_ui_task_tick(void) {
     // Should run smoothly without errors or side effects in native mode
     ui_task_tick(30);
@@ -434,6 +450,7 @@ int main(void) {
     RUN_TEST(test_ui_set_wifi_status);
     RUN_TEST(test_ui_update_lyrics_clear);
     RUN_TEST(test_ui_task_tick);
+    RUN_TEST(test_ui_ap_setup_mode);
 
     return UNITY_END();
 }

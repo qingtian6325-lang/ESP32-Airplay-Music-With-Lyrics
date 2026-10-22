@@ -2,6 +2,8 @@
 
 基于 **ESP32-WROVER-E (8MB PSRAM)** 的开源智能音频桌面摆件。支持通过 **苹果 AirPlay 1 (RAOP)** 及 **手机/电脑经典蓝牙 (A2DP)** 无线播放音乐（完美兼容 Apple Music 与 YouTube Music），并外接一块彩色 TFT 屏幕，实时通过 **[lrc.cx (LrcAPI)](https://docs.lrc.cx/docs/QuickStart/)** 官方公开服务与 **LRCLIB** 双源引擎拉取歌词并同步高亮滚动显示。
 
+支持 **手机免密热点动态 Web 网页配网（Captive Portal 强制门户）**，无需插电脑改代码，随时随地手机一键配网并永久保存在芯片内部！
+
 ---
 
 ## ✨ 核心特性
@@ -10,6 +12,10 @@
   - **Apple AirPlay 1 (RAOP)**：支持 iPhone、iPad、Mac 在控制中心一键投屏，44.1kHz 16-bit 无损/CD 级传输。
   - **经典蓝牙 A2DP Sink**：通用手机、电脑蓝牙配对连接，支持 AVRCP 播放控制与歌曲元数据回传。
   - **智能音频仲裁**：AirPlay 优先抢占，AirPlay 开始播放时自动暂停蓝牙，停止后自动恢复。
+- **动态 Web 网页配网 (Captive Portal / WiFiManager 体验)**：
+  - **免密热点自建**：新机或更换 Wi-Fi 环境时，自动广播免密热点 **`ESP32-Lyrics-Setup`**。
+  - **手机自动弹窗**：手机连上热点后自动弹出暗黑风格配置网页（亦可访问 `192.168.4.1`），列出附近扫描到的 2.4G Wi-Fi。
+  - **NVS 永久记忆**：选网输入密码后自动保存至 ESP32 内部 Flash（Preferences），重启秒连，永不丢失。
 - **高可用双源自动级联歌词引擎**：
   - **首选源 (Primary)**：官方公开 **[lrc.cx (LrcAPI)](https://docs.lrc.cx/docs/QuickStart/)** 接口（`https://api.lrc.cx/lyrics`），聚合 QQ 音乐、网易云、酷狗及 Apple Music，华语/流行/动漫曲库匹配率极高。
   - **备选兜底 (Fallback)**：若 `lrc.cx` 未命中或网络波动，Core 1 自动无缝切换至 **LRCLIB**（`https://lrclib.net`）进行二次检索。
@@ -20,7 +26,7 @@
 - **实时同步滚动歌词 (Layout A 布局)**：
   - 屏幕呈现 **5 行平滑滚动歌词**，当前演唱行以青蓝色 (`#00D2FF`) 加粗高亮放大显示。
   - 顶部显示音源图标（AirPlay / 蓝牙 / Wi-Fi 状态），底部显示已播时间 / 总时长进度条。
-  - 无网络或纯音乐自动优雅回退为大字号歌曲信息与状态界面。
+  - 配网时屏幕自动切换为清晰的引导提示（显示热点名与 IP）。
 - **FreeRTOS 双核高效调度**：
   - **Core 0 (`CORE_AUDIO`)**：专职负责 Wi-Fi、蓝牙协议栈、AirPlay RTSP/RTP 服务及 I2S DMA 音频推流，杜绝卡顿爆音。
   - **Core 1 (`CORE_UI`)**：负责 LVGL 8.x 界面渲染、网络歌词拉取及 10Hz 播放进度与歌词对齐计时器。
@@ -95,7 +101,7 @@
 
 ---
 
-### 第三阶段：克隆代码、配置 Wi-Fi 与一键烧录
+### 第三阶段：一键烧录固件（无需提前写死密码！）
 1. **获取代码**：
    ```bash
    git clone https://github.com/qingtian6325-lang/ESP32-Airplay-Music-With-Lyrics.git
@@ -103,15 +109,7 @@
    ```
 2. **在 VS Code 中打开此项目**：
    - 点击 `File` -> `Open Folder`，选择项目文件夹。
-3. **配置你的家用 Wi-Fi**：
-   - 打开 `include/config.h` 文件。
-   - 找到并修改第 53-56 行的 Wi-Fi 名称和密码（注意：ESP32 仅支持 2.4GHz 频段 Wi-Fi）：
-     ```c
-     #define WIFI_SSID           "你家的2.4G_WiFi名称"
-     #define WIFI_PASSWORD       "你家的WiFi密码"
-     ```
-   - *（歌词源已默认配置为官方公开 API `https://api.lrc.cx/lyrics`，并开启双源回退，无需额外修改）*
-4. **连接 ESP32 开发板并一键烧录**：
+3. **直接一键烧录**：
    - 用 Type-C 数据线将 ESP32 插入电脑 USB 口。
    - 在 VS Code 底部状态栏，点击 **PlatformIO: Upload** 按钮（右箭头 `→` 图标），或者在终端输入：
      ```bash
@@ -121,10 +119,14 @@
 
 ---
 
-### 第四阶段：通电开机与日常听歌体验
+### 第四阶段：手机动态配网与日常听歌体验
 
-1. **开机自检**：
-   - 烧录完成后 ESP32 自动重启。屏幕点亮并显示音响界面，右上角 Wi-Fi 图标连接成功后亮起。
+1. **第一次开机动态配网（极速 10 秒搞定）**：
+   - 烧录后音箱开机，屏幕显示 `【Wi-Fi 配网模式】请连接热点: ESP32-Lyrics-Setup`。
+   - 拿出手机，在 Wi-Fi 列表中连接名为 **`ESP32-Lyrics-Setup`** 的免密热点。
+   - 手机将**自动弹出配置网页**（也可以在手机浏览器访问 `http://192.168.4.1`）。
+   - 在网页列表中点击您家的 Wi-Fi 名称，输入密码，点击**【保存并连接音箱】**。
+   - 音箱接收到密码后自动重启连网，屏幕右上角 Wi-Fi 图标点亮，进入播放界面！*(密码已永久保存在芯片内部，之后开机均自动秒连)*
 2. **连接经典蓝牙播放音乐（Android / iPhone / PC）**：
    - 手机打开系统设置 -> 蓝牙，搜索名为 **`ESP32-Lyrics-Speaker`** 的设备并点击配对。
    - 打开网易云音乐、QQ 音乐、Spotify 或 YouTube Music 播放歌曲。
@@ -142,17 +144,18 @@
 本项目内置完整的本地 Native 单元测试套件，在不连接硬件的情况下即可完成全算法与状态机验证：
 
 ```bash
-# 运行全套 114 项单元测试
+# 运行全套 122 项单元测试
 pio test -e native
 ```
 
 测试覆盖范围：
 - `test_config`：PSRAM GPIO 16/17 禁区检查、外设引脚映射与歌词多源配置校验。
+- `test_wifi_portal`：NVS 凭证存储与读取、Captive Portal AP 状态机、连接超时与回退。
 - `test_audio`：I2S 初始化、软件音量衰减算法与缓冲区防溢出保护。
 - `test_bt_metadata`：蓝牙 AVRCP 属性防抖、时长延迟到达与多参数通知分发。
 - `test_airplay`：AirPlay DAAP（`minm`/`asar`/`asal`）解包器、异常断连重置。
 - `test_lrc`：`lrc.cx` 官方纯文本 LRC 解析、UTF-8 中文与毫秒时间戳匹配、双源级联回退状态机。
-- `test_ui`：时间格式化、文本省略截断、5 行滚动歌词窗口滑动算法。
+- `test_ui`：时间格式化、文本省略截断、5 行滚动歌词窗口滑动算法、AP 配网模式屏幕提示。
 - `test_integration`：双核音频仲裁状态机（AirPlay 抢占蓝牙、空闲恢复）。
 
 ---
@@ -165,9 +168,8 @@ pio test -e native
 2. **Q: 喇叭有杂音或没有声音？**
    - MAX98357A 的 VIN 引脚务必接 **5V**，不要接 3.3V。
    - 检查 GPIO 25 (BCLK)、GPIO 26 (LRC)、GPIO 27 (DIN) 是否接反。
-3. **Q: 屏幕显示“未收录歌词”？**
-   - 检查 ESP32 是否成功连上家用 Wi-Fi（路由器需开启 2.4GHz 频段）。
-   - 若歌曲为极冷门伴奏或纯音乐，系统会自动显示歌曲基本信息而无需显示歌词。
+3. **Q: 怎样给音箱重新换一个 Wi-Fi？**
+   - 如果您把音箱带去办公室或新朋友家，它在开机 8 秒内找不到原有的 Wi-Fi，就会**自动重新启动 `ESP32-Lyrics-Setup` 免密热点**，用手机连上即可重新设置新的 Wi-Fi！
 4. **Q: 我可以换成自建的 LrcAPI 服务器吗？**
    - 可以！若您在 NAS 或 Docker 部署了 `hisatri/lrcapi`，只需在 `include/config.h` 中将 `LRC_CX_API_ENDPOINT` 改为您局域网的地址（如 `http://192.168.1.100:28883/lyrics`）即可。
 

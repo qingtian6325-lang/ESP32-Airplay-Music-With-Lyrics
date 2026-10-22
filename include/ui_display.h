@@ -23,6 +23,7 @@ typedef struct UIState {
     uint32_t current_ms;
     uint32_t total_ms;
     bool wifi_connected;
+    bool ap_setup_mode;
     int active_lyric_index;
     char lyric_window[5][128]; // -2, -1, 0 (active), +1, +2
 } UIState;
@@ -75,6 +76,14 @@ void ui_update_lyrics(const LyricsData *lyrics);
 void ui_set_wifi_status(bool connected);
 
 /**
+ * @brief Switch UI to AP setup / Captive Portal configuration mode.
+ *
+ * @param ap_mode true to show setup mode instructions, false for normal mode.
+ * @param ap_ssid Optional hotspot SSID string (defaults to "ESP32-Lyrics-Setup").
+ */
+void ui_set_ap_setup_mode(bool ap_mode, const char *ap_ssid);
+
+/**
  * @brief Get the read-only snapshot of current UI state.
  *
  * @return Constant pointer to internal UIState structure.
@@ -89,29 +98,29 @@ const UIState* ui_get_state(void);
  * @brief Format playback milliseconds into human-readable string ("mm:ss" or "hh:mm:ss").
  *
  * @param ms Playback time in milliseconds.
- * @param out Output string buffer.
- * @param out_len Capacity of out buffer including null terminator.
+ * @param buf Output string buffer.
+ * @param buf_len Total buffer capacity including null-terminator.
  */
-void format_time_ms(uint32_t ms, char *out, size_t out_len);
+void format_time_ms(uint32_t ms, char *buf, size_t buf_len);
 
 /**
- * @brief Truncate string for display screen width with ellipsis protection.
+ * @brief Truncate string with an ellipsis ("...") if it exceeds max_len - 1.
  *
- * @param in Input string.
- * @param out Output string buffer.
- * @param max_len Maximum length of out buffer including null terminator.
+ * @param src Source null-terminated string.
+ * @param dst Destination buffer.
+ * @param max_len Buffer size including null-terminator.
  */
-void truncate_for_display(const char *in, char *out, size_t max_len);
+void truncate_for_display(const char *src, char *dst, size_t max_len);
 
 /**
- * @brief Compute the 5-line lyric window [-2, -1, 0 (active), +1, +2].
+ * @brief Compute the 5-line lyrics scrolling window for a given track time.
  *
- * @param lyrics Pointer to loaded lyrics data.
+ * @param lyrics Parsed lyrics data pointer.
  * @param current_ms Playback position in milliseconds.
- * @param window Output 5x128 2D character array for the 5 lines.
- * @param active_idx Output pointer for active lyric line index (-1 if none/before start).
+ * @param window 2D char array to receive 5 lines [-2, -1, 0, +1, +2].
+ * @param active_index Pointer to receive active line index (-1 if none).
  */
-void compute_lyric_window(const LyricsData *lyrics, uint32_t current_ms, char window[5][128], int *active_idx);
+void compute_lyric_window(const LyricsData *lyrics, uint32_t current_ms, char window[5][128], int *active_index);
 
 #ifdef __cplusplus
 }

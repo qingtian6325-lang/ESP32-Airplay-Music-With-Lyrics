@@ -8,6 +8,7 @@
 #include "airplay_receiver.h"
 #include "lyrics_service.h"
 #include "ui_display.h"
+#include "wifi_portal.h"
 #include "state_arbiter.h"
 
 // =============================================================================
@@ -228,10 +229,24 @@ void setup() {
         log_i("LVGL Display UI initialized successfully on Core %d", CORE_UI);
     }
 
-    // 5. Connect to Wi-Fi in background (Non-blocking)
-    log_i("Initiating Wi-Fi connection to SSID '%s'...", WIFI_SSID);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    // 5. Initialize Dynamic Wi-Fi Portal (NVS Storage & Captive Portal)
+    wifi_portal_init(NULL);
+    bool wifi_connected_boot = false;
+    if (wifi_portal_has_saved_credentials()) {
+        char saved_ssid[32] = {0};
+        wifi_portal_get_saved_ssid(saved_ssid, sizeof(saved_ssid));
+        log_i("Attempting connection to saved Wi-Fi '%s'...", saved_ssid);
+        wifi_connected_boot = wifi_portal_connect_saved(8000);
+    }
+
+    if (!wifi_connected_boot) {
+        log_w("No saved Wi-Fi or connection failed; entering Captive Portal setup mode...");
+        ui_set_ap_setup_mode(true, WIFI_PORTAL_AP_SSID);
+        wifi_portal_start_ap();
+    } else {
+        ui_set_wifi_status(true);
+        log_i("Wi-Fi connected successfully! IP: %s", WiFi.localIP().toString().c_str());
+    }
 
     // 6. Initialize Async Lyrics Service (Worker task pinned to CORE_UI)
     if (!lyrics_service_init()) {
@@ -263,6 +278,18 @@ void setup() {
 
 void loop() {
     // Arduino loopTask runs on Core 1 (CORE_UI)
+    // 1. Process AP Captive Portal Web requests if in setup mode
+    if (wifi_portal_get_state() == WIFI_PORTAL_STATE_AP_CONFIGURING) {
+        wifi_portal_process_ap();
+    } else if (wifi_portal_get_state() == WIFI_PORTAL_STATE_CONNECTED) {
+        const UIState *st = ui_get_state();
+        if (st && st->ap_setup_mode) {
+            ui_set_ap_setup_mode(false, NULL);
+            ui_set_wifi_status(true);
+            log_i("Captive Portal provisioned successfully! Local IP: %s", WiFi.localIP().toString().c_str());
+        }
+    }
+
     // Periodically update Wi-Fi connection status indicator
     static bool s_last_wifi_connected = false;
     bool wifi_connected = (WiFi.status() == WL_CONNECTED);
