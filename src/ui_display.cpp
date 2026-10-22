@@ -8,7 +8,12 @@
 // =============================================================================
 
 static UIState s_ui_state;
-static LyricsData s_current_lyrics;
+#if (defined(ESP_PLATFORM) || defined(ARDUINO)) && !defined(ARDUINO_ARCH_NATIVE)
+static LyricsData *s_current_lyrics = NULL;
+#else
+static LyricsData s_native_current_lyrics;
+static LyricsData *s_current_lyrics = &s_native_current_lyrics;
+#endif
 static bool s_ui_initialized = false;
 
 // Forward declaration of hardware update hooks
@@ -125,19 +130,21 @@ void ui_update_progress(uint32_t current_ms, uint32_t total_ms) {
     s_ui_state.current_ms = current_ms;
     s_ui_state.total_ms = total_ms;
 
-    compute_lyric_window(&s_current_lyrics, current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+    compute_lyric_window(s_current_lyrics, current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
     hw_update_progress_view();
     hw_update_lyrics_view();
 }
 
 void ui_update_lyrics(const LyricsData *lyrics) {
-    if (lyrics) {
-        memcpy(&s_current_lyrics, lyrics, sizeof(LyricsData));
-    } else {
-        memset(&s_current_lyrics, 0, sizeof(LyricsData));
+    if (s_current_lyrics) {
+        if (lyrics) {
+            memcpy(s_current_lyrics, lyrics, sizeof(LyricsData));
+        } else {
+            memset(s_current_lyrics, 0, sizeof(LyricsData));
+        }
     }
 
-    compute_lyric_window(&s_current_lyrics, s_ui_state.current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+    compute_lyric_window(s_current_lyrics, s_ui_state.current_ms, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
     hw_update_lyrics_view();
 }
 
@@ -169,7 +176,7 @@ const UIState* ui_get_state(void) {
 
 static TFT_eSPI s_tft = TFT_eSPI();
 static lv_disp_draw_buf_t s_disp_draw_buf;
-static lv_color_t s_disp_buf[DISP_HOR_RES * 20]; // 320 x 20 lines buffer (~12.8 KB)
+static lv_color_t *s_disp_buf = NULL; // Dynamically allocated in PSRAM/heap (~12.8 KB)
 static lv_disp_drv_t s_disp_drv;
 
 static SemaphoreHandle_t s_lvgl_mutex = NULL;
@@ -365,12 +372,23 @@ static void hw_update_wifi_view(void) {
 }
 
 bool ui_init(void) {
+    if (!s_current_lyrics) {
+        if (psramFound()) {
+            s_current_lyrics = (LyricsData *)ps_malloc(sizeof(LyricsData));
+        }
+        if (!s_current_lyrics) {
+            s_current_lyrics = (LyricsData *)malloc(sizeof(LyricsData));
+        }
+    }
+    if (s_current_lyrics) {
+        memset(s_current_lyrics, 0, sizeof(LyricsData));
+    }
+
     memset(&s_ui_state, 0, sizeof(s_ui_state));
-    memset(&s_current_lyrics, 0, sizeof(s_current_lyrics));
     s_ui_state.source = SOURCE_NONE;
     s_ui_state.active_lyric_index = -1;
     s_ui_state.wifi_connected = false;
-    compute_lyric_window(&s_current_lyrics, 0, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+    compute_lyric_window(s_current_lyrics, 0, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
 
     if (s_ui_initialized) {
         return true;
@@ -388,9 +406,21 @@ bool ui_init(void) {
     s_tft.init();
     s_tft.setRotation(1); // 320x240 Landscape
 
+    // Dynamically allocate LVGL draw buffer in PSRAM / heap
+    if (!s_disp_buf) {
+        if (psramFound()) {
+            s_disp_buf = (lv_color_t *)ps_malloc(DISP_HOR_RES * 20 * sizeof(lv_color_t));
+        }
+        if (!s_disp_buf) {
+            s_disp_buf = (lv_color_t *)malloc(DISP_HOR_RES * 20 * sizeof(lv_color_t));
+        }
+    }
+
     // LVGL Init
     lv_init();
-    lv_disp_draw_buf_init(&s_disp_draw_buf, s_disp_buf, NULL, DISP_HOR_RES * 20);
+    if (s_disp_buf) {
+        lv_disp_draw_buf_init(&s_disp_draw_buf, s_disp_buf, NULL, DISP_HOR_RES * 20);
+    }
 
     lv_disp_drv_init(&s_disp_drv);
     s_disp_drv.hor_res = DISP_HOR_RES;
@@ -440,11 +470,13 @@ static void hw_update_wifi_view(void) {}
 
 bool ui_init(void) {
     memset(&s_ui_state, 0, sizeof(s_ui_state));
-    memset(&s_current_lyrics, 0, sizeof(s_current_lyrics));
+    if (s_current_lyrics) {
+        memset(s_current_lyrics, 0, sizeof(LyricsData));
+    }
     s_ui_state.source = SOURCE_NONE;
     s_ui_state.active_lyric_index = -1;
     s_ui_state.wifi_connected = false;
-    compute_lyric_window(&s_current_lyrics, 0, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
+    compute_lyric_window(s_current_lyrics, 0, s_ui_state.lyric_window, &s_ui_state.active_lyric_index);
     s_ui_initialized = true;
     return true;
 }

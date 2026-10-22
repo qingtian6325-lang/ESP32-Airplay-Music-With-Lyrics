@@ -327,9 +327,8 @@ static QueueHandle_t s_lyrics_queue = NULL;
 static TaskHandle_t s_lyrics_task_handle = NULL;
 static volatile bool s_service_running = false;
 
-// Statically allocated in BSS (not on task stack) to prevent FreeRTOS stack overflow
-static LyricsData s_worker_lyrics_data;
-static LyricsData s_error_lyrics_data;
+// Dynamically allocated in PSRAM / heap to prevent .dram0.bss overflow
+static LyricsData *s_worker_lyrics_data = NULL;
 
 static void lyrics_worker_task(void *pvParameters) {
     (void)pvParameters;
@@ -341,14 +340,17 @@ static void lyrics_worker_task(void *pvParameters) {
                 break;
             }
 
-            memset(&s_worker_lyrics_data, 0, sizeof(s_worker_lyrics_data));
+            if (!s_worker_lyrics_data) {
+                continue;
+            }
+            memset(s_worker_lyrics_data, 0, sizeof(LyricsData));
             // Do not pre-populate title and artist so lrc_parse can extract [ti:] and [ar:] from tags.
 
             if (WiFi.status() != WL_CONNECTED) {
                 if (req.callback) {
-                    if (req.title[0] != '\0') strncpy(s_worker_lyrics_data.title, req.title, sizeof(s_worker_lyrics_data.title) - 1);
-                    if (req.artist[0] != '\0') strncpy(s_worker_lyrics_data.artist, req.artist, sizeof(s_worker_lyrics_data.artist) - 1);
-                    req.callback(&s_worker_lyrics_data, false);
+                    if (req.title[0] != '\0') strncpy(s_worker_lyrics_data->title, req.title, sizeof(s_worker_lyrics_data->title) - 1);
+                    if (req.artist[0] != '\0') strncpy(s_worker_lyrics_data->artist, req.artist, sizeof(s_worker_lyrics_data->artist) - 1);
+                    req.callback(s_worker_lyrics_data, false);
                 }
                 continue;
             }
@@ -379,7 +381,7 @@ static void lyrics_worker_task(void *pvParameters) {
                 if (!err) {
                     const char *synced_lyrics = doc["syncedLyrics"];
                     if (synced_lyrics && strlen(synced_lyrics) > 0) {
-                        if (lrc_parse(synced_lyrics, &s_worker_lyrics_data)) {
+                        if (lrc_parse(synced_lyrics, s_worker_lyrics_data)) {
                             parsed_ok = true;
                         }
                     }
@@ -388,15 +390,15 @@ static void lyrics_worker_task(void *pvParameters) {
             http.end();
 
             // Fallback to request title/artist if not present in LRC metadata tags
-            if (s_worker_lyrics_data.title[0] == '\0') {
-                strncpy(s_worker_lyrics_data.title, req.title, sizeof(s_worker_lyrics_data.title) - 1);
+            if (s_worker_lyrics_data->title[0] == '\0') {
+                strncpy(s_worker_lyrics_data->title, req.title, sizeof(s_worker_lyrics_data->title) - 1);
             }
-            if (s_worker_lyrics_data.artist[0] == '\0') {
-                strncpy(s_worker_lyrics_data.artist, req.artist, sizeof(s_worker_lyrics_data.artist) - 1);
+            if (s_worker_lyrics_data->artist[0] == '\0') {
+                strncpy(s_worker_lyrics_data->artist, req.artist, sizeof(s_worker_lyrics_data->artist) - 1);
             }
 
             if (req.callback) {
-                req.callback(&s_worker_lyrics_data, parsed_ok);
+                req.callback(s_worker_lyrics_data, parsed_ok);
             }
         }
     }
@@ -406,6 +408,18 @@ static void lyrics_worker_task(void *pvParameters) {
 }
 
 bool lyrics_service_init(void) {
+    if (!s_worker_lyrics_data) {
+        if (psramFound()) {
+            s_worker_lyrics_data = (LyricsData *)ps_malloc(sizeof(LyricsData));
+        }
+        if (!s_worker_lyrics_data) {
+            s_worker_lyrics_data = (LyricsData *)malloc(sizeof(LyricsData));
+        }
+        if (!s_worker_lyrics_data) {
+            return false;
+        }
+    }
+
     if (s_service_running) {
         return true;
     }
@@ -472,11 +486,15 @@ void lyrics_service_stop(void) {
 void lyrics_fetch_async(const char *title, const char *artist, LyricsLoadedCallback cb) {
     if (!s_service_running || !s_lyrics_queue) {
         if (cb) {
-            memset(&s_error_lyrics_data, 0, sizeof(s_error_lyrics_data));
-            if (title) strncpy(s_error_lyrics_data.title, title, sizeof(s_error_lyrics_data.title) - 1);
-            if (artist) strncpy(s_error_lyrics_data.artist, artist, sizeof(s_error_lyrics_data.artist) - 1);
-            s_error_lyrics_data.loaded = false;
-            cb(&s_error_lyrics_data, false);
+            if (s_worker_lyrics_data) {
+                memset(s_worker_lyrics_data, 0, sizeof(LyricsData));
+                if (title) strncpy(s_worker_lyrics_data->title, title, sizeof(s_worker_lyrics_data->title) - 1);
+                if (artist) strncpy(s_worker_lyrics_data->artist, artist, sizeof(s_worker_lyrics_data->artist) - 1);
+                s_worker_lyrics_data->loaded = false;
+                cb(s_worker_lyrics_data, false);
+            } else {
+                cb(NULL, false);
+            }
         }
         return;
     }
