@@ -82,6 +82,8 @@ void parse_avrcp_metadata(const char *raw_title, const char *raw_artist, const c
 void bt_sink_mock_set_connected(bool connected);
 void bt_sink_mock_set_playing(bool playing);
 void bt_sink_mock_trigger_track(const TrackInfo *track);
+void bt_sink_mock_handle_avrc_attribute(uint8_t attr_id, const char *text);
+void bt_sink_mock_flush_metadata(void);
 #endif
 
 #ifdef __cplusplus

@@ -158,6 +158,63 @@ void test_callback_registration_and_dispatch(void) {
     TEST_ASSERT_FALSE(bt_sink_is_playing());
 }
 
+void test_duration_change_triggers_notification(void) {
+    bt_sink_register_track_callback(on_track_change_test);
+
+    // Initial track with duration 0
+    TrackInfo track;
+    parse_avrcp_metadata("Blinding Lights", "The Weeknd", "After Hours", &track);
+    track.duration_ms = 0;
+    bt_sink_mock_trigger_track(&track);
+
+    TEST_ASSERT_EQUAL_INT(1, s_track_cb_count);
+    TEST_ASSERT_EQUAL_UINT32(0, s_last_track.duration_ms);
+
+    // Duration arrives later
+    track.duration_ms = 200000;
+    bt_sink_mock_trigger_track(&track);
+
+    TEST_ASSERT_EQUAL_INT(2, s_track_cb_count);
+    TEST_ASSERT_EQUAL_UINT32(200000, s_last_track.duration_ms);
+}
+
+void test_metadata_updates_settle_properly(void) {
+    bt_sink_register_track_callback(on_track_change_test);
+
+    // Staggered AVRCP arrival: Title arrives first
+    bt_sink_mock_handle_avrc_attribute(0x01 /* Title */, "Cruel Summer");
+    // Should NOT prematurely fire with empty artist
+    TEST_ASSERT_EQUAL_INT(0, s_track_cb_count);
+
+    // Artist arrives
+    bt_sink_mock_handle_avrc_attribute(0x02 /* Artist */, "Taylor Swift");
+    TEST_ASSERT_EQUAL_INT(0, s_track_cb_count);
+
+    // Album arrives
+    bt_sink_mock_handle_avrc_attribute(0x04 /* Album */, "Lover");
+    TEST_ASSERT_EQUAL_INT(0, s_track_cb_count);
+
+    // Playing time arrives
+    bt_sink_mock_handle_avrc_attribute(0x40 /* Playing Time */, "178000");
+    TEST_ASSERT_EQUAL_INT(0, s_track_cb_count);
+
+    // Debounce / settling window completes
+    bt_sink_mock_flush_metadata();
+
+    // Exactly 1 notification dispatched with all fields intact
+    TEST_ASSERT_EQUAL_INT(1, s_track_cb_count);
+    TEST_ASSERT_EQUAL_STRING("Cruel Summer", s_last_track.title);
+    TEST_ASSERT_EQUAL_STRING("Taylor Swift", s_last_track.artist);
+    TEST_ASSERT_EQUAL_STRING("Lover", s_last_track.album);
+    TEST_ASSERT_EQUAL_UINT32(178000, s_last_track.duration_ms);
+
+    // Late duration update after initial dispatch
+    bt_sink_mock_handle_avrc_attribute(0x40 /* Playing Time */, "178500");
+    bt_sink_mock_flush_metadata();
+    TEST_ASSERT_EQUAL_INT(2, s_track_cb_count);
+    TEST_ASSERT_EQUAL_UINT32(178500, s_last_track.duration_ms);
+}
+
 void test_sink_init_stop_state(void) {
     TEST_ASSERT_FALSE(bt_sink_is_connected());
     TEST_ASSERT_FALSE(bt_sink_is_playing());
@@ -183,6 +240,8 @@ void setup() {
     RUN_TEST(test_parse_truncation_protection);
     RUN_TEST(test_three_param_overload);
     RUN_TEST(test_callback_registration_and_dispatch);
+    RUN_TEST(test_duration_change_triggers_notification);
+    RUN_TEST(test_metadata_updates_settle_properly);
     RUN_TEST(test_sink_init_stop_state);
     UNITY_END();
 }
@@ -197,6 +256,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_parse_truncation_protection);
     RUN_TEST(test_three_param_overload);
     RUN_TEST(test_callback_registration_and_dispatch);
+    RUN_TEST(test_duration_change_triggers_notification);
+    RUN_TEST(test_metadata_updates_settle_properly);
     RUN_TEST(test_sink_init_stop_state);
     return UNITY_END();
 }

@@ -50,9 +50,12 @@ void parse_avrcp_metadata(const char *raw_title, const char *raw_artist, const c
 #if (defined(ESP_PLATFORM) || defined(ARDUINO)) && !defined(ARDUINO_ARCH_NATIVE)
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/timers.h>
 #include "BluetoothA2DPSink.h"
 #include "esp_avrc_api.h"
 #include "esp_a2dp_api.h"
+#include "config.h"
 #include "audio_i2s.h"
 
 static BluetoothA2DPSink s_a2dp_sink;
@@ -61,7 +64,9 @@ static PlaybackStatusCallback s_status_callback = nullptr;
 
 static TrackInfo s_current_track = { {0}, {0}, {0}, 0 };
 static TrackInfo s_last_notified_track = { {0}, {0}, {0}, 0 };
-static bool s_is_playing = false;
+static volatile bool s_is_playing = false;
+
+static TimerHandle_t s_meta_timer = NULL;
 
 // Audio data callback: forwards decoded stereo PCM frames directly to audio_i2s_write
 static void bt_audio_data_callback(const uint8_t *data, uint32_t len) {
@@ -70,8 +75,8 @@ static void bt_audio_data_callback(const uint8_t *data, uint32_t len) {
     }
 }
 
-// Check and notify track change if title, artist, or album has changed
-static void check_and_notify_track_change() {
+// Dispatches settled track metadata if any field changed
+static void dispatch_track_change(void) {
     if (!s_track_callback) {
         return;
     }
@@ -81,10 +86,39 @@ static void check_and_notify_track_change() {
     }
     if (strcmp(s_current_track.title, s_last_notified_track.title) != 0 ||
         strcmp(s_current_track.artist, s_last_notified_track.artist) != 0 ||
-        strcmp(s_current_track.album, s_last_notified_track.album) != 0) {
+        strcmp(s_current_track.album, s_last_notified_track.album) != 0 ||
+        s_current_track.duration_ms != s_last_notified_track.duration_ms) {
         
         s_last_notified_track = s_current_track;
         s_track_callback(&s_current_track);
+    }
+}
+
+// Timer callback executing after debounce settling window (100ms)
+static void meta_timer_callback(TimerHandle_t xTimer) {
+    (void)xTimer;
+    dispatch_track_change();
+}
+
+// Check and arm debounce timer to allow staggered AVRCP attributes to arrive
+static void check_and_notify_track_change(void) {
+    if (!s_track_callback) {
+        return;
+    }
+    // Do not arm debounce timer if all fields are empty
+    if (s_current_track.title[0] == '\0' && s_current_track.artist[0] == '\0') {
+        return;
+    }
+
+    if (s_meta_timer == NULL) {
+        s_meta_timer = xTimerCreate("bt_meta_tmr", pdMS_TO_TICKS(100), pdFALSE, NULL, meta_timer_callback);
+    }
+
+    if (s_meta_timer != NULL) {
+        xTimerReset(s_meta_timer, 0);
+    } else {
+        // Fallback to immediate dispatch if timer allocation failed
+        dispatch_track_change();
     }
 }
 
@@ -108,6 +142,7 @@ static void bt_avrc_metadata_callback(uint8_t attr_id, const uint8_t *attr_text)
             if (text && *text) {
                 s_current_track.duration_ms = (uint32_t)strtoul(text, NULL, 10);
             }
+            check_and_notify_track_change();
             break;
         default:
             break;
@@ -118,6 +153,9 @@ static void bt_avrc_metadata_callback(uint8_t attr_id, const uint8_t *attr_text)
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
 static void bt_avrc_track_change_callback(uint8_t *id) {
     (void)id;
+    if (s_meta_timer != NULL) {
+        xTimerStop(s_meta_timer, 0);
+    }
     // Reset last notified track so incoming metadata triggers notification
     memset(&s_last_notified_track, 0, sizeof(s_last_notified_track));
     memset(&s_current_track, 0, sizeof(s_current_track));
@@ -153,6 +191,9 @@ static void bt_audio_state_callback(esp_a2d_audio_state_t state, void *obj) {
 static void bt_connection_state_callback(esp_a2d_connection_state_t state, void *obj) {
     (void)obj;
     if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+        if (s_meta_timer != NULL) {
+            xTimerStop(s_meta_timer, 0);
+        }
         s_is_playing = false;
         memset(&s_current_track, 0, sizeof(s_current_track));
         memset(&s_last_notified_track, 0, sizeof(s_last_notified_track));
@@ -190,6 +231,9 @@ bool bt_sink_init(const char *device_name) {
 }
 
 void bt_sink_stop(void) {
+    if (s_meta_timer != NULL) {
+        xTimerStop(s_meta_timer, 0);
+    }
     s_a2dp_sink.end(false);
     s_is_playing = false;
     memset(&s_current_track, 0, sizeof(s_current_track));
@@ -220,9 +264,31 @@ void bt_sink_register_status_callback(PlaybackStatusCallback cb) {
 
 static bool s_mock_initialized = false;
 static bool s_mock_connected = false;
-static bool s_mock_playing = false;
+static volatile bool s_mock_playing = false;
 static TrackChangeCallback s_mock_track_cb = nullptr;
 static PlaybackStatusCallback s_mock_status_cb = nullptr;
+
+static TrackInfo s_mock_current_track = { {0}, {0}, {0}, 0 };
+static TrackInfo s_mock_last_notified_track = { {0}, {0}, {0}, 0 };
+static bool s_mock_meta_pending = false;
+
+static void dispatch_mock_track_change(void) {
+    if (!s_mock_track_cb) {
+        return;
+    }
+    if (s_mock_current_track.title[0] == '\0' && s_mock_current_track.artist[0] == '\0') {
+        return;
+    }
+    if (strcmp(s_mock_current_track.title, s_mock_last_notified_track.title) != 0 ||
+        strcmp(s_mock_current_track.artist, s_mock_last_notified_track.artist) != 0 ||
+        strcmp(s_mock_current_track.album, s_mock_last_notified_track.album) != 0 ||
+        s_mock_current_track.duration_ms != s_mock_last_notified_track.duration_ms) {
+        
+        s_mock_last_notified_track = s_mock_current_track;
+        s_mock_track_cb(&s_mock_current_track);
+    }
+    s_mock_meta_pending = false;
+}
 
 bool bt_sink_init(const char *device_name) {
     (void)device_name;
@@ -234,6 +300,9 @@ void bt_sink_stop(void) {
     s_mock_initialized = false;
     s_mock_connected = false;
     s_mock_playing = false;
+    s_mock_meta_pending = false;
+    memset(&s_mock_current_track, 0, sizeof(s_mock_current_track));
+    memset(&s_mock_last_notified_track, 0, sizeof(s_mock_last_notified_track));
 }
 
 bool bt_sink_is_connected(void) {
@@ -270,8 +339,40 @@ void bt_sink_mock_set_playing(bool playing) {
 }
 
 void bt_sink_mock_trigger_track(const TrackInfo *track) {
-    if (s_mock_track_cb && track) {
-        s_mock_track_cb(track);
+    if (track) {
+        s_mock_current_track = *track;
+        dispatch_mock_track_change();
+    }
+}
+
+void bt_sink_mock_handle_avrc_attribute(uint8_t attr_id, const char *text) {
+    switch (attr_id) {
+        case 0x01: // Title
+            sanitize_string(text, s_mock_current_track.title, sizeof(s_mock_current_track.title));
+            s_mock_meta_pending = true;
+            break;
+        case 0x02: // Artist
+            sanitize_string(text, s_mock_current_track.artist, sizeof(s_mock_current_track.artist));
+            s_mock_meta_pending = true;
+            break;
+        case 0x04: // Album
+            sanitize_string(text, s_mock_current_track.album, sizeof(s_mock_current_track.album));
+            s_mock_meta_pending = true;
+            break;
+        case 0x40: // Playing Time
+            if (text && *text) {
+                s_mock_current_track.duration_ms = (uint32_t)strtoul(text, NULL, 10);
+            }
+            s_mock_meta_pending = true;
+            break;
+        default:
+            break;
+    }
+}
+
+void bt_sink_mock_flush_metadata(void) {
+    if (s_mock_meta_pending) {
+        dispatch_mock_track_change();
     }
 }
 
