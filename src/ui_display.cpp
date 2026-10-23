@@ -196,12 +196,12 @@ const UIState* ui_get_state(void) {
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 
-#define DISP_HOR_RES 320
-#define DISP_VER_RES 240
+#define DISP_HOR_RES UI_HOR_RES
+#define DISP_VER_RES UI_VER_RES
 
 static TFT_eSPI s_tft = TFT_eSPI();
 static lv_disp_draw_buf_t s_disp_draw_buf;
-static lv_color_t *s_disp_buf = NULL; // Dynamically allocated in PSRAM/heap (~12.8 KB)
+static lv_color_t *s_disp_buf = NULL; // Dynamically allocated in PSRAM/heap
 static lv_disp_drv_t s_disp_drv;
 
 static SemaphoreHandle_t s_lvgl_mutex = NULL;
@@ -238,9 +238,13 @@ static void create_layout_a(void) {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0a0a0e), 0);
 
-    // 1. Top Status Bar (Height: 28px)
+    const lv_coord_t top_h = 32;
+    const lv_coord_t bottom_h = 44;
+    const lv_coord_t center_h = DISP_VER_RES - top_h - bottom_h;
+
+    // 1. Top Status Bar
     s_status_bar = lv_obj_create(scr);
-    lv_obj_set_size(s_status_bar, DISP_HOR_RES, 28);
+    lv_obj_set_size(s_status_bar, DISP_HOR_RES, top_h);
     lv_obj_align(s_status_bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(s_status_bar, lv_color_hex(0x16161d), 0);
     lv_obj_set_style_pad_all(s_status_bar, 0, 0);
@@ -248,49 +252,49 @@ static void create_layout_a(void) {
     lv_obj_clear_flag(s_status_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     s_lbl_source = lv_label_create(s_status_bar);
-    lv_obj_align(s_lbl_source, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_align(s_lbl_source, LV_ALIGN_LEFT_MID, 10, 0);
     lv_obj_set_style_text_color(s_lbl_source, lv_color_hex(0x888888), 0);
     lv_label_set_text(s_lbl_source, "IDLE");
 
     s_lbl_title = lv_label_create(s_status_bar);
     lv_obj_align(s_lbl_title, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_width(s_lbl_title, 190);
+    lv_obj_set_width(s_lbl_title, DISP_HOR_RES - 140);
     lv_obj_set_style_text_align(s_lbl_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_lbl_title, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(0xFFFFFF), 0);
     lv_label_set_text(s_lbl_title, "Ready to Play");
 
     s_lbl_wifi = lv_label_create(s_status_bar);
-    lv_obj_align(s_lbl_wifi, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_align(s_lbl_wifi, LV_ALIGN_RIGHT_MID, -10, 0);
     lv_obj_set_style_text_color(s_lbl_wifi, lv_color_hex(0x666666), 0);
     lv_label_set_text(s_lbl_wifi, "WiFi OFF");
 
-    // 2. Central 5-Line Scrolling Lyrics Container (Height: 172px, y: 28..200)
+    // 2. Central 5-Line Scrolling Lyrics Container
     s_lyrics_cont = lv_obj_create(scr);
-    lv_obj_set_size(s_lyrics_cont, DISP_HOR_RES, 172);
-    lv_obj_align(s_lyrics_cont, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_size(s_lyrics_cont, DISP_HOR_RES, center_h);
+    lv_obj_align(s_lyrics_cont, LV_ALIGN_TOP_MID, 0, top_h);
     lv_obj_set_style_bg_color(s_lyrics_cont, lv_color_hex(0x0a0a0e), 0);
     lv_obj_set_style_pad_all(s_lyrics_cont, 0, 0);
     lv_obj_set_style_border_width(s_lyrics_cont, 0, 0);
     lv_obj_clear_flag(s_lyrics_cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    const lv_coord_t y_offsets[5] = { 6, 38, 70, 104, 136 };
+    const lv_coord_t line_step = center_h / 5;
     // Palette for lines: Line 2 is highlighted cyan (#00D2FF), adjacent are brighter, outer are dim
     const uint32_t colors[5] = { 0x555555, 0x999999, 0x00D2FF, 0x999999, 0x555555 };
 
     for (int i = 0; i < 5; i++) {
         s_lbl_lyrics[i] = lv_label_create(s_lyrics_cont);
-        lv_obj_set_width(s_lbl_lyrics[i], 310);
-        lv_obj_set_pos(s_lbl_lyrics[i], 5, y_offsets[i]);
+        lv_obj_set_width(s_lbl_lyrics[i], DISP_HOR_RES - 16);
+        lv_obj_set_pos(s_lbl_lyrics[i], 8, (i * line_step) + (line_step / 4));
         lv_obj_set_style_text_align(s_lbl_lyrics[i], LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(s_lbl_lyrics[i], LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_color(s_lbl_lyrics[i], lv_color_hex(colors[i]), 0);
         lv_label_set_text(s_lbl_lyrics[i], (i == 2) ? "No lyrics available" : "");
     }
 
-    // 3. Bottom Playback Progress Bar (Height: 40px, y: 200..240)
+    // 3. Bottom Playback Progress Bar
     s_bottom_bar = lv_obj_create(scr);
-    lv_obj_set_size(s_bottom_bar, DISP_HOR_RES, 40);
+    lv_obj_set_size(s_bottom_bar, DISP_HOR_RES, bottom_h);
     lv_obj_align(s_bottom_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(s_bottom_bar, lv_color_hex(0x16161d), 0);
     lv_obj_set_style_pad_all(s_bottom_bar, 0, 0);
@@ -298,17 +302,17 @@ static void create_layout_a(void) {
     lv_obj_clear_flag(s_bottom_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     s_lbl_elapsed = lv_label_create(s_bottom_bar);
-    lv_obj_align(s_lbl_elapsed, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_align(s_lbl_elapsed, LV_ALIGN_LEFT_MID, 10, 0);
     lv_obj_set_style_text_color(s_lbl_elapsed, lv_color_hex(0x888888), 0);
     lv_label_set_text(s_lbl_elapsed, "00:00");
 
     s_lbl_total = lv_label_create(s_bottom_bar);
-    lv_obj_align(s_lbl_total, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_align(s_lbl_total, LV_ALIGN_RIGHT_MID, -10, 0);
     lv_obj_set_style_text_color(s_lbl_total, lv_color_hex(0x888888), 0);
     lv_label_set_text(s_lbl_total, "00:00");
 
     s_bar_progress = lv_bar_create(s_bottom_bar);
-    lv_obj_set_size(s_bar_progress, 180, 8);
+    lv_obj_set_size(s_bar_progress, DISP_HOR_RES - 140, 8);
     lv_obj_align(s_bar_progress, LV_ALIGN_CENTER, 0, 0);
     lv_bar_set_range(s_bar_progress, 0, 1000);
     lv_bar_set_value(s_bar_progress, 0, LV_ANIM_OFF);
@@ -429,7 +433,7 @@ bool ui_init(void) {
 
     // TFT Driver Init
     s_tft.init();
-    s_tft.setRotation(1); // 320x240 Landscape
+    s_tft.setRotation(1); // Landscape (480x320 for 3.5" TFT)
 
     // Dynamically allocate LVGL draw buffer in PSRAM / heap
     if (!s_disp_buf) {

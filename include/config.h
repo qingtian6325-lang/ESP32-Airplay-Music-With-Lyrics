@@ -25,7 +25,7 @@
 #define AUDIO_CHANNELS          2
 
 // =============================================================================
-// SPI Display Interface (ST7789 / ILI9341 - 320x240 Landscape)
+// SPI Display Interface (3.5" ILI9488 / ST7796S 480x320 Landscape)
 // =============================================================================
 #define TFT_CS_PIN          5       // Chip Select (VSPI CS0)
 #define TFT_DC_PIN          2       // Data / Command control
@@ -34,12 +34,18 @@
 #define TFT_MOSI_PIN        23      // SPI MOSI (VSPI MOSI)
 #define TFT_BLK_PIN         21      // Backlight PWM brightness control
 
-// Display geometry
+// Display geometry (Landscape 480x320 for 3.5" SPI TFT)
+#ifndef UI_HOR_RES
+#define UI_HOR_RES          480
+#endif
+#ifndef UI_VER_RES
+#define UI_VER_RES          320
+#endif
 #ifndef TFT_WIDTH
 #define TFT_WIDTH           320
 #endif
 #ifndef TFT_HEIGHT
-#define TFT_HEIGHT          240
+#define TFT_HEIGHT          480
 #endif
 
 // =============================================================================
